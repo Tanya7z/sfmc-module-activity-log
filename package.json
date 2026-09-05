@@ -1,0 +1,46 @@
+{
+  "name": "@sfmc-bds/module-activity-log",
+  "version": "0.2.0",
+  "type": "module",
+  "description": "SAPI module: 行为日志",
+  "main": "sapi/src/index.ts",
+  "exports": {
+    ".": "./sapi/src/index.ts"
+  },
+  "files": [
+    "sapi",
+    "configs-default",
+    "test",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "npm run typecheck",
+    "typecheck": "tsc --noEmit -p sapi/tsconfig.json",
+    "test": "node --test --import tsx/esm test/*.test.ts",
+    "lint": "eslint \"sapi/**/*.ts\" \"test/**/*.ts\"",
+    "format": "prettier --write ."
+  },
+  "devDependencies": {
+    "@minecraft/server": "2.10.0-beta.1.26.40-preview.30",
+    "@minecraft/server-net": "1.0.0-beta.11940b24",
+    "@minecraft/server-ui": "2.2.0-beta.1.26.40-preview.30",
+    "@minecraft/vanilla-data": "1.26.40-preview.30",
+    "@sfmc-bds/eslint-plugin": "file:../ScriptsForMinecraftServer/modules/sdk/@sfmc-eslint-plugin",
+    "@sfmc-bds/sdk": "file:../ScriptsForMinecraftServer/modules/sdk/@sfmc-sdk",
+    "@types/node": "^22.13.0",
+    "@typescript-eslint/eslint-plugin": "^8.64.0",
+    "@typescript-eslint/parser": "^8.64.0",
+    "eslint": "^10.7.0",
+    "prettier": "^3.9.5",
+    "prettier-plugin-organize-imports": "^4.3.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  },
+  "peerDependencies": {
+    "@sfmc-bds/sdk": ">=0.2.0"
+  },
+  "engines": {
+    "node": ">=22.13.0"
+  }
+}

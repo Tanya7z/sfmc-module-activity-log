@@ -1,0 +1,39 @@
+{
+  "$schema": "https://cdn.jsdelivr.net/gh/DogeLakeDev/ScriptsForMinecraftServer@latest/modules/sdk/%40sfmc-sdk/schemas/sapi-manifest.v2.schema.json",
+  "schemaVersion": 2,
+  "id": "activity-log",
+  "name": "行为日志",
+  "configKey": "activity_log",
+  "requires": [],
+  "permissions": [
+    "config:read:activity_log",
+    "db:read:sfmc_activities",
+    "db:write:sfmc_activities",
+    "service:activity.record",
+    "service:activity.query"
+  ],
+  "services": {
+    "provides": [
+      {
+        "name": "activity.record",
+        "input": {
+          "type": "object"
+        },
+        "output": {
+          "type": "object"
+        }
+      },
+      {
+        "name": "activity.query",
+        "input": {
+          "type": "object"
+        },
+        "output": {
+          "type": "object"
+        }
+      }
+    ],
+    "requires": []
+  },
+  "notes": "原生 after-events + activity.record/query；批量刷盘与过期清理。"
+}
