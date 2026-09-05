@@ -26,8 +26,8 @@
     "@minecraft/server-net": "1.0.0-beta.11940b24",
     "@minecraft/server-ui": "2.2.0-beta.1.26.40-preview.30",
     "@minecraft/vanilla-data": "1.26.40-preview.30",
-    "@sfmc-bds/eslint-plugin": "file:../ScriptsForMinecraftServer/modules/sdk/@sfmc-eslint-plugin",
-    "@sfmc-bds/sdk": "file:../ScriptsForMinecraftServer/modules/sdk/@sfmc-sdk",
+    "@sfmc-bds/eslint-plugin": "^0.1.1-beta.3",
+    "@sfmc-bds/sdk": "^0.2.0-beta.10",
     "@types/node": "^22.13.0",
     "@typescript-eslint/eslint-plugin": "^8.64.0",
     "@typescript-eslint/parser": "^8.64.0",
@@ -44,3 +44,4 @@
     "node": ">=22.13.0"
   }
 }
+
