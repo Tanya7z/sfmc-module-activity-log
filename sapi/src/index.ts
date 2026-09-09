@@ -29,9 +29,9 @@ import {
   type PlayerPlaceBlockAfterEvent,
   type PlayerSpawnAfterEvent,
 } from "@minecraft/server";
+import { ModuleRegistry } from "@sfmc-bds/sdk/module-loader";
 import { config } from "@sfmc-bds/sdk/sapi/config";
 import { db } from "@sfmc-bds/sdk/sapi/db";
-import { ModuleRegistry } from "@sfmc-bds/sdk/module-loader";
 import { debug } from "@sfmc-bds/sdk/sapi/runtime";
 import { service } from "@sfmc-bds/sdk/sapi/service";
 
@@ -85,17 +85,47 @@ type EventSignal<T> = {
   unsubscribe: (cb: (arg: T) => void) => void;
 };
 
-function dimId(entityOrBlock: Entity | Block): string {
+function dimId(entityOrBlock?: Entity | Block | null): string {
+  if (!entityOrBlock) return "";
   try {
+    if ("isValid" in entityOrBlock && typeof (entityOrBlock as any).isValid === "function") {
+      if (!(entityOrBlock as any).isValid()) return "";
+    }
     return entityOrBlock.dimension?.id || "";
   } catch {
     return "";
   }
 }
 
-function loc(v?: Vector3): [number | null, number | null, number | null] {
-  if (!v) return [null, null, null];
-  return [Math.round(v.x), Math.round(v.y), Math.round(v.z)];
+function safeLoc(target?: Entity | Block | Vector3 | null): [number | null, number | null, number | null] {
+  if (!target) return [null, null, null];
+  try {
+    if ("x" in target && typeof target.x === "number") {
+      return [Math.round(target.x), Math.round(target.y), Math.round(target.z)];
+    }
+    if ("isValid" in target && typeof (target as any).isValid === "function") {
+      if (!(target as any).isValid()) return [null, null, null];
+    }
+    const loc = (target as Entity | Block).location;
+    if (loc) {
+      return [Math.round(loc.x), Math.round(loc.y), Math.round(loc.z)];
+    }
+  } catch {
+    return [null, null, null];
+  }
+  return [null, null, null];
+}
+
+function safeTypeId(target?: Entity | Block | null): string {
+  if (!target) return "";
+  try {
+    if ("isValid" in target && typeof (target as any).isValid === "function") {
+      if (!(target as any).isValid()) return "";
+    }
+    return (target as any).typeId || "";
+  } catch {
+    return "";
+  }
 }
 
 function enqueue(partial: {
@@ -156,7 +186,7 @@ async function flush(): Promise<void> {
     debug.e(
       "ActivityLog",
       `flush failed (${batch.length} retained)`,
-      err instanceof Error ? err : new Error(String(err)),
+      err instanceof Error ? err : new Error(String(err))
     );
     queue = batch.concat(queue);
   }
@@ -194,9 +224,7 @@ function handleRecord(input: Record<string, unknown>): { ok: boolean } {
     z: typeof input.z === "number" ? input.z : undefined,
     level,
     payload:
-      input.payload && typeof input.payload === "object"
-        ? (input.payload as Record<string, unknown>)
-        : undefined,
+      input.payload && typeof input.payload === "object" ? (input.payload as Record<string, unknown>) : undefined,
   });
   return { ok: true };
 }
@@ -220,8 +248,7 @@ async function handleQuery(input: Record<string, unknown>): Promise<{
   if (typeof input.from === "number") clauses.push({ gte: ["timestamp", input.from] });
   if (typeof input.to === "number") clauses.push({ lte: ["timestamp", input.to] });
 
-  const where =
-    clauses.length === 0 ? undefined : clauses.length === 1 ? clauses[0] : { and: clauses };
+  const where = clauses.length === 0 ? undefined : clauses.length === 1 ? clauses[0] : { and: clauses };
 
   const rows = await db.query<Record<string, unknown>>(TABLE, {
     ...(where ? { where: where as never } : {}),
@@ -265,17 +292,24 @@ async function handleQuery(input: Record<string, unknown>): Promise<{
 }
 
 function playerEnqueue(player: Player, eventType: string, extra: Partial<Parameters<typeof enqueue>[0]> = {}): void {
-  const [x, y, z] = loc(player.location);
-  enqueue({
-    eventType,
-    actorId: player.id,
-    actorName: player.name,
-    dimension: dimId(player),
-    x,
-    y,
-    z,
-    ...extra,
-  });
+  try {
+    if (!player) return;
+    const isValid = (player as unknown as { isValid?: unknown }).isValid;
+    if (typeof isValid === "function" && !isValid.call(player)) return;
+    const [x, y, z] = safeLoc(player);
+    enqueue({
+      eventType,
+      actorId: player.id,
+      actorName: player.name,
+      dimension: dimId(player),
+      x,
+      y,
+      z,
+      ...extra,
+    });
+  } catch (err) {
+    debug.w("ActivityLog", `playerEnqueue failed for ${eventType}`, err);
+  }
 }
 
 function safeSubscribe<T>(signal: EventSignal<T> | undefined, cb: (arg: T) => void): void {
@@ -294,214 +328,293 @@ function subscribeNative(): void {
   const AE = world.afterEvents;
 
   safeSubscribe(AE.playerSpawn, (event: PlayerSpawnAfterEvent) => {
-    if (event.initialSpawn) playerEnqueue(event.player, "player.join");
-    else playerEnqueue(event.player, "player.spawn");
+    try {
+      if (event.initialSpawn) playerEnqueue(event.player, "player.join");
+      else playerEnqueue(event.player, "player.spawn");
+    } catch (err) {
+      debug.w("ActivityLog", "playerSpawn handler failed", err);
+    }
   });
 
   safeSubscribe(AE.playerLeave, (event: PlayerLeaveAfterEvent) => {
-    enqueue({
-      eventType: "player.leave",
-      actorId: event.playerId,
-      actorName: event.playerName,
-      payload: { playerId: event.playerId },
-    });
+    try {
+      enqueue({
+        eventType: "player.leave",
+        actorId: event.playerId,
+        actorName: event.playerName,
+        payload: { playerId: event.playerId },
+      });
+    } catch (err) {
+      debug.w("ActivityLog", "playerLeave handler failed", err);
+    }
   });
 
   safeSubscribe(AE.playerDimensionChange, (event: PlayerDimensionChangeAfterEvent) => {
-    const [x, y, z] = loc(event.toLocation);
-    playerEnqueue(event.player, "player.dimension", {
-      x,
-      y,
-      z,
-      payload: {
-        from: event.fromDimension.id,
-        to: event.toDimension.id,
-      },
-    });
+    try {
+      const [x, y, z] = safeLoc(event.toLocation);
+      playerEnqueue(event.player, "player.dimension", {
+        x,
+        y,
+        z,
+        payload: {
+          from: event.fromDimension?.id || "",
+          to: event.toDimension?.id || "",
+        },
+      });
+    } catch (err) {
+      debug.w("ActivityLog", "playerDimensionChange handler failed", err);
+    }
   });
 
   safeSubscribe(AE.playerGameModeChange, (event: PlayerGameModeChangeAfterEvent) => {
-    playerEnqueue(event.player, "player.gamemode", {
-      payload: { from: event.fromGameMode, to: event.toGameMode },
-    });
+    try {
+      playerEnqueue(event.player, "player.gamemode", {
+        payload: { from: event.fromGameMode, to: event.toGameMode },
+      });
+    } catch (err) {
+      debug.w("ActivityLog", "playerGameModeChange handler failed", err);
+    }
   });
 
   safeSubscribe(AE.chatSend, (event: ChatSendAfterEvent) => {
-    playerEnqueue(event.sender, "player.chat", {
-      payload: { message: event.message },
-    });
+    try {
+      playerEnqueue(event.sender, "player.chat", {
+        payload: { message: event.message },
+      });
+    } catch (err) {
+      debug.w("ActivityLog", "chatSend handler failed", err);
+    }
   });
 
   safeSubscribe(AE.playerBreakBlock, (event: PlayerBreakBlockAfterEvent) => {
-    const [x, y, z] = loc(event.block.location);
-    playerEnqueue(event.player, "block.break", {
-      targetId: event.brokenBlockPermutation.type.id,
-      x,
-      y,
-      z,
-    });
+    try {
+      const [x, y, z] = safeLoc(event.block);
+      playerEnqueue(event.player, "block.break", {
+        targetId: event.brokenBlockPermutation?.type?.id || "",
+        x,
+        y,
+        z,
+      });
+    } catch (err) {
+      debug.w("ActivityLog", "playerBreakBlock handler failed", err);
+    }
   });
 
   safeSubscribe(AE.playerPlaceBlock, (event: PlayerPlaceBlockAfterEvent) => {
-    const [x, y, z] = loc(event.block.location);
-    playerEnqueue(event.player, "block.place", {
-      targetId: event.block.typeId,
-      x,
-      y,
-      z,
-    });
+    try {
+      const [x, y, z] = safeLoc(event.block);
+      playerEnqueue(event.player, "block.place", {
+        targetId: safeTypeId(event.block),
+        x,
+        y,
+        z,
+      });
+    } catch (err) {
+      debug.w("ActivityLog", "playerPlaceBlock handler failed", err);
+    }
   });
 
   safeSubscribe(AE.entityDie, (event: EntityDieAfterEvent) => {
-    const dead = event.deadEntity;
-    const [x, y, z] = loc(dead.location);
-    const killer = event.damageSource.damagingEntity;
-    if (killer?.typeId === "minecraft:player") {
-      playerEnqueue(killer as Player, "entity.death", {
-        targetId: dead.typeId === "minecraft:player" ? (dead as Player).id : dead.typeId,
-        x,
-        y,
-        z,
-        payload: { cause: event.damageSource.cause },
-      });
-    } else {
-      enqueue({
-        eventType: "entity.death",
-        actorName: killer?.typeId || event.damageSource.cause,
-        targetId: dead.typeId,
-        dimension: dimId(dead),
-        x,
-        y,
-        z,
-        payload: { cause: event.damageSource.cause },
-      });
+    try {
+      const dead = event.deadEntity;
+      const [x, y, z] = safeLoc(dead);
+      const killer = event.damageSource?.damagingEntity;
+      const killerTypeId = safeTypeId(killer);
+      const deadTypeId = safeTypeId(dead);
+      if (killerTypeId === "minecraft:player" && killer) {
+        playerEnqueue(killer as Player, "entity.death", {
+          targetId: deadTypeId === "minecraft:player" ? (dead as Player).id : deadTypeId,
+          x,
+          y,
+          z,
+          payload: { cause: event.damageSource?.cause },
+        });
+      } else {
+        enqueue({
+          eventType: "entity.death",
+          actorName: killerTypeId || event.damageSource?.cause || "unknown",
+          targetId: deadTypeId,
+          dimension: dimId(dead),
+          x,
+          y,
+          z,
+          payload: { cause: event.damageSource?.cause },
+        });
+      }
+    } catch (err) {
+      debug.w("ActivityLog", "entityDie handler failed", err);
     }
   });
 
   safeSubscribe(AE.entityHitEntity, (event: EntityHitEntityAfterEvent) => {
-    const attacker = event.damagingEntity;
-    const victim = event.hitEntity;
-    const [x, y, z] = loc(victim.location);
-    if (attacker.typeId === "minecraft:player") {
-      playerEnqueue(attacker as Player, "entity.hit", {
-        targetId: victim.typeId === "minecraft:player" ? (victim as Player).id : victim.typeId,
-        x,
-        y,
-        z,
-      });
+    try {
+      const attacker = event.damagingEntity;
+      const victim = event.hitEntity;
+      const [x, y, z] = safeLoc(victim);
+      const attackerTypeId = safeTypeId(attacker);
+      const victimTypeId = safeTypeId(victim);
+      if (attackerTypeId === "minecraft:player" && attacker) {
+        playerEnqueue(attacker as Player, "entity.hit", {
+          targetId: victimTypeId === "minecraft:player" ? (victim as Player).id : victimTypeId,
+          x,
+          y,
+          z,
+        });
+      }
+    } catch (err) {
+      debug.w("ActivityLog", "entityHitEntity handler failed", err);
     }
   });
 
   safeSubscribe(AE.entityHurt, (event: EntityHurtAfterEvent) => {
-    if (event.hurtEntity.typeId !== "minecraft:player") return;
-    playerEnqueue(event.hurtEntity as Player, "entity.hurt", {
-      payload: {
-        damage: event.damage,
-        cause: event.damageSource.cause,
-      },
-    });
+    try {
+      if (safeTypeId(event.hurtEntity) !== "minecraft:player") return;
+      playerEnqueue(event.hurtEntity as Player, "entity.hurt", {
+        payload: {
+          damage: event.damage,
+          cause: event.damageSource?.cause,
+        },
+      });
+    } catch (err) {
+      debug.w("ActivityLog", "entityHurt handler failed", err);
+    }
   });
 
   safeSubscribe(AE.playerInteractWithEntity, (event: PlayerInteractWithEntityAfterEvent) => {
-    const [x, y, z] = loc(event.target.location);
-    playerEnqueue(event.player, "entity.interact", {
-      targetId: event.target.typeId,
-      x,
-      y,
-      z,
-    });
-  });
-
-  safeSubscribe(AE.entityTamed, (event: EntityTamedAfterEvent) => {
-    const tamer = event.tamingEntity;
-    if (!tamer || tamer.typeId !== "minecraft:player") return;
-    const [x, y, z] = loc(event.entity.location);
-    playerEnqueue(tamer as Player, "entity.tame", {
-      targetId: event.entity.typeId,
-      x,
-      y,
-      z,
-    });
-  });
-
-  safeSubscribe(AE.entitySpawn, (event: EntitySpawnAfterEvent) => {
-    if (event.entity.typeId === "minecraft:player") return;
-    const [x, y, z] = loc(event.entity.location);
-    enqueue({
-      eventType: "entity.spawn",
-      actorName: event.entity.typeId,
-      dimension: dimId(event.entity),
-      x,
-      y,
-      z,
-      payload: { cause: event.cause },
-    });
-  });
-
-  safeSubscribe(AE.entityItemDrop, (event: EntityItemDropAfterEvent) => {
-    const e = event.entity;
-    const items = event.items.map((item: Entity) => item.typeId);
-    if (e.typeId === "minecraft:player") {
-      playerEnqueue(e as Player, "item.drop", { payload: { items } });
-    } else {
-      const [x, y, z] = loc(e.location);
-      enqueue({
-        eventType: "item.drop",
-        actorName: e.typeId,
-        dimension: dimId(e),
+    try {
+      const [x, y, z] = safeLoc(event.target);
+      playerEnqueue(event.player, "entity.interact", {
+        targetId: safeTypeId(event.target),
         x,
         y,
         z,
-        payload: { items },
       });
+    } catch (err) {
+      debug.w("ActivityLog", "playerInteractWithEntity handler failed", err);
+    }
+  });
+
+  safeSubscribe(AE.entityTamed, (event: EntityTamedAfterEvent) => {
+    try {
+      const tamer = event.tamingEntity;
+      if (!tamer || safeTypeId(tamer) !== "minecraft:player") return;
+      const [x, y, z] = safeLoc(event.entity);
+      playerEnqueue(tamer as Player, "entity.tame", {
+        targetId: safeTypeId(event.entity),
+        x,
+        y,
+        z,
+      });
+    } catch (err) {
+      debug.w("ActivityLog", "entityTamed handler failed", err);
+    }
+  });
+
+  safeSubscribe(AE.entitySpawn, (event: EntitySpawnAfterEvent) => {
+    try {
+      const typeId = safeTypeId(event.entity);
+      if (typeId === "minecraft:player") return;
+      const [x, y, z] = safeLoc(event.entity);
+      enqueue({
+        eventType: "entity.spawn",
+        actorName: typeId,
+        dimension: dimId(event.entity),
+        x,
+        y,
+        z,
+        payload: { cause: event.cause },
+      });
+    } catch (err) {
+      debug.w("ActivityLog", "entitySpawn handler failed", err);
+    }
+  });
+
+  safeSubscribe(AE.entityItemDrop, (event: EntityItemDropAfterEvent) => {
+    try {
+      const e = event.entity;
+      const items = (event.items || []).map((item: Entity) => safeTypeId(item)).filter(Boolean);
+      if (safeTypeId(e) === "minecraft:player") {
+        playerEnqueue(e as Player, "item.drop", { payload: { items } });
+      } else {
+        const [x, y, z] = safeLoc(e);
+        enqueue({
+          eventType: "item.drop",
+          actorName: safeTypeId(e),
+          dimension: dimId(e),
+          x,
+          y,
+          z,
+          payload: { items },
+        });
+      }
+    } catch (err) {
+      debug.w("ActivityLog", "entityItemDrop handler failed", err);
     }
   });
 
   safeSubscribe(AE.entityItemPickup, (event: EntityItemPickupAfterEvent) => {
-    if (event.entity.typeId !== "minecraft:player") return;
-    playerEnqueue(event.entity as Player, "item.pickup", {
-      payload: { items: event.items.map((item: ItemStack) => item.type.id) },
-    });
+    try {
+      if (safeTypeId(event.entity) !== "minecraft:player") return;
+      playerEnqueue(event.entity as Player, "item.pickup", {
+        payload: { items: (event.items || []).map((item: ItemStack) => item?.type?.id || "").filter(Boolean) },
+      });
+    } catch (err) {
+      debug.w("ActivityLog", "entityItemPickup handler failed", err);
+    }
   });
 
   safeSubscribe(AE.blockContainerOpened, (event: BlockContainerOpenedAfterEvent) => {
-    const source = event.openSource.entity;
-    if (!source || source.typeId !== "minecraft:player") return;
-    const [x, y, z] = loc(event.block.location);
-    playerEnqueue(source as Player, "container.open", {
-      targetId: event.block.typeId,
-      x,
-      y,
-      z,
-    });
+    try {
+      const source = event.openSource?.entity;
+      if (!source || safeTypeId(source) !== "minecraft:player") return;
+      const [x, y, z] = safeLoc(event.block);
+      playerEnqueue(source as Player, "container.open", {
+        targetId: safeTypeId(event.block),
+        x,
+        y,
+        z,
+      });
+    } catch (err) {
+      debug.w("ActivityLog", "blockContainerOpened handler failed", err);
+    }
   });
 
   safeSubscribe(AE.blockContainerClosed, (event: BlockContainerClosedAfterEvent) => {
-    const source = event.closeSource.entity;
-    if (!source || source.typeId !== "minecraft:player") return;
-    const [x, y, z] = loc(event.block.location);
-    playerEnqueue(source as Player, "container.close", {
-      targetId: event.block.typeId,
-      x,
-      y,
-      z,
-    });
+    try {
+      const source = event.closeSource?.entity;
+      if (!source || safeTypeId(source) !== "minecraft:player") return;
+      const [x, y, z] = safeLoc(event.block);
+      playerEnqueue(source as Player, "container.close", {
+        targetId: safeTypeId(event.block),
+        x,
+        y,
+        z,
+      });
+    } catch (err) {
+      debug.w("ActivityLog", "blockContainerClosed handler failed", err);
+    }
   });
 
   safeSubscribe(AE.explosion, (event: ExplosionAfterEvent) => {
-    const source = event.source;
-    const [x, y, z] = source ? loc(source.location) : [null, null, null];
-    enqueue({
-      eventType: "world.explosion",
-      actorId: source?.typeId === "minecraft:player" ? (source as Player).id : "",
-      actorName: source?.typeId || "unknown",
-      dimension: event.dimension.id,
-      x,
-      y,
-      z,
-      level: "warn",
-      payload: { impactedBlocks: event.getImpactedBlocks().length },
-    });
+    try {
+      const source = event.source;
+      const [x, y, z] = safeLoc(source);
+      const sourceTypeId = safeTypeId(source);
+      const impacted = event.getImpactedBlocks ? event.getImpactedBlocks() : [];
+      enqueue({
+        eventType: "world.explosion",
+        actorId: sourceTypeId === "minecraft:player" ? (source as Player).id : "",
+        actorName: sourceTypeId || "unknown",
+        dimension: event.dimension?.id || "",
+        x,
+        y,
+        z,
+        level: "warn",
+        payload: { impactedBlocks: impacted ? impacted.length : 0 },
+      });
+    } catch (err) {
+      debug.w("ActivityLog", "explosion handler failed", err);
+    }
   });
 }
 
@@ -511,9 +624,6 @@ ModuleRegistry.register({
   lifecycle: {
     registerPermissions() {
       // 无命令面
-    },
-    registerCommands() {
-      // 无
     },
     registerEvents() {
       subscribeNative();
