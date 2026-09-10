@@ -35,5 +35,5 @@
     ],
     "requires": []
   },
-  "notes": "原生 after-events + activity.record/query；批量刷盘与过期清理。"
+  "notes": "原生 after-events + activity.record/query；批量刷盘并永久保留历史记录。"
 }

@@ -18,7 +18,6 @@ import {
   type EntityHurtAfterEvent,
   type EntityItemDropAfterEvent,
   type EntityItemPickupAfterEvent,
-  type EntitySpawnAfterEvent,
   type EntityTamedAfterEvent,
   type ExplosionAfterEvent,
   type PlayerBreakBlockAfterEvent,
@@ -34,6 +33,7 @@ import { config } from "@sfmc-bds/sdk/sapi/config";
 import { db } from "@sfmc-bds/sdk/sapi/db";
 import { debug } from "@sfmc-bds/sdk/sapi/runtime";
 import { service } from "@sfmc-bds/sdk/sapi/service";
+import { takeBatch } from "./queue-policy.js";
 
 const MODULE_ID = "activity-log";
 const TABLE = "sfmc_activities";
@@ -72,11 +72,10 @@ interface ActivityRecord {
 }
 
 let queue: QueueEntry[] = [];
-let retentionDays = 30;
 let flushIntervalMs = 2000;
 let batchSize = 100;
 let flushTimer: number | undefined;
-let cleanupTimer: number | undefined;
+let flushInProgress = false;
 const unprovide: Array<() => void> = [];
 const eventCleanups: Array<() => void> = [];
 
@@ -159,9 +158,9 @@ function enqueue(partial: {
 }
 
 async function flush(): Promise<void> {
-  if (queue.length === 0) return;
-  const batch = queue;
-  queue = [];
+  if (flushInProgress || queue.length === 0) return;
+  flushInProgress = true;
+  const batch = takeBatch(queue, batchSize);
   try {
     await db.tx(async (tx) => {
       for (const e of batch) {
@@ -189,22 +188,9 @@ async function flush(): Promise<void> {
       err instanceof Error ? err : new Error(String(err))
     );
     queue = batch.concat(queue);
-  }
-}
-
-async function cleanupExpired(): Promise<void> {
-  const cutoff = Date.now() - retentionDays * 86400_000;
-  try {
-    const old = await db.query<{ id: string }>(TABLE, {
-      where: { lt: ["timestamp", cutoff] },
-      limit: 1000,
-    });
-    if (old.length === 0) return;
-    await db.tx(async (tx) => {
-      for (const row of old) await tx.delete(TABLE, row.id);
-    });
-  } catch (err) {
-    debug.e("ActivityLog", "cleanup failed", err instanceof Error ? err : new Error(String(err)));
+  } finally {
+    flushInProgress = false;
+    if (queue.length >= batchSize) void flush();
   }
 }
 
@@ -429,12 +415,9 @@ function subscribeNative(): void {
           z,
           payload: { cause: event.damageSource?.cause },
         });
-      } else {
-        enqueue({
-          eventType: "entity.death",
-          actorName: killerTypeId || event.damageSource?.cause || "unknown",
-          targetId: deadTypeId,
-          dimension: dimId(dead),
+      } else if (deadTypeId === "minecraft:player") {
+        playerEnqueue(dead as Player, "entity.death", {
+          targetId: killerTypeId || event.damageSource?.cause || "unknown",
           x,
           y,
           z,
@@ -510,42 +493,12 @@ function subscribeNative(): void {
     }
   });
 
-  safeSubscribe(AE.entitySpawn, (event: EntitySpawnAfterEvent) => {
-    try {
-      const typeId = safeTypeId(event.entity);
-      if (typeId === "minecraft:player") return;
-      const [x, y, z] = safeLoc(event.entity);
-      enqueue({
-        eventType: "entity.spawn",
-        actorName: typeId,
-        dimension: dimId(event.entity),
-        x,
-        y,
-        z,
-        payload: { cause: event.cause },
-      });
-    } catch (err) {
-      debug.w("ActivityLog", "entitySpawn handler failed", err);
-    }
-  });
-
   safeSubscribe(AE.entityItemDrop, (event: EntityItemDropAfterEvent) => {
     try {
       const e = event.entity;
       const items = (event.items || []).map((item: Entity) => safeTypeId(item)).filter(Boolean);
       if (safeTypeId(e) === "minecraft:player") {
         playerEnqueue(e as Player, "item.drop", { payload: { items } });
-      } else {
-        const [x, y, z] = safeLoc(e);
-        enqueue({
-          eventType: "item.drop",
-          actorName: safeTypeId(e),
-          dimension: dimId(e),
-          x,
-          y,
-          z,
-          payload: { items },
-        });
       }
     } catch (err) {
       debug.w("ActivityLog", "entityItemDrop handler failed", err);
@@ -598,14 +551,11 @@ function subscribeNative(): void {
   safeSubscribe(AE.explosion, (event: ExplosionAfterEvent) => {
     try {
       const source = event.source;
-      const [x, y, z] = safeLoc(source);
       const sourceTypeId = safeTypeId(source);
+      if (!source || sourceTypeId !== "minecraft:player") return;
+      const [x, y, z] = safeLoc(source);
       const impacted = event.getImpactedBlocks ? event.getImpactedBlocks() : [];
-      enqueue({
-        eventType: "world.explosion",
-        actorId: sourceTypeId === "minecraft:player" ? (source as Player).id : "",
-        actorName: sourceTypeId || "unknown",
-        dimension: event.dimension?.id || "",
+      playerEnqueue(source as Player, "world.explosion", {
         x,
         y,
         z,
@@ -629,10 +579,8 @@ ModuleRegistry.register({
       subscribeNative();
     },
     async init() {
-      const retention = await config.get<number>("retention_days");
       const flushMs = await config.get<number>("flush_interval_ms");
       const batch = await config.get<number>("batch_size");
-      if (typeof retention === "number" && retention > 0) retentionDays = retention;
       if (typeof flushMs === "number" && flushMs > 0) flushIntervalMs = flushMs;
       if (typeof batch === "number" && batch > 0) batchSize = batch;
 
@@ -654,8 +602,6 @@ ModuleRegistry.register({
 
       const flushTicks = Math.max(1, Math.round(flushIntervalMs / 50));
       flushTimer = system.runInterval(() => void flush(), flushTicks);
-      // 约每日清理一次（72000 ticks ≈ 1 小时检查，内部按 retention 删）
-      cleanupTimer = system.runInterval(() => void cleanupExpired(), 72000);
 
       unprovide.push(service.provide("activity.record", (input) => handleRecord(input)));
       unprovide.push(service.provide("activity.query", (input) => handleQuery(input)));
@@ -678,14 +624,6 @@ ModuleRegistry.register({
           /* ignore */
         }
         flushTimer = undefined;
-      }
-      if (cleanupTimer !== undefined) {
-        try {
-          system.clearRun(cleanupTimer);
-        } catch {
-          /* ignore */
-        }
-        cleanupTimer = undefined;
       }
       void flush();
       debug.i("ActivityLog", "cleanup");

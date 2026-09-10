@@ -1,6 +1,6 @@
 {
   "name": "@sfmc-bds/module-activity-log",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "type": "module",
   "description": "SAPI module: 行为日志",
   "main": "sapi/src/index.ts",
