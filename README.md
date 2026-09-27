@@ -5,9 +5,9 @@ Wave A official SFMC module: **activity-log** (行为日志).
 ## Develop
 
 ```bash
-npm install
-npm run typecheck
-npm test
+pnpm install
+pnpm run typecheck
+pnpm run test
 ```
 
 Install into platform:
