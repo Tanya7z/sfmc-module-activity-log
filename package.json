@@ -1,8 +1,11 @@
 {
   "name": "@sfmc-bds/module-activity-log",
   "version": "0.2.1",
+  "packageManager": "pnpm@10.8.0",
   "type": "module",
   "description": "SAPI module: 行为日志",
+  "license": "ISC",
+  "repository": "git+https://github.com/Tanya7z/sfmc-module-activity-log.git",
   "main": "sapi/src/index.ts",
   "exports": {
     ".": "./sapi/src/index.ts"
@@ -15,7 +18,7 @@
     "LICENSE"
   ],
   "scripts": {
-    "build": "npm run typecheck",
+    "build": "pnpm run typecheck",
     "typecheck": "tsc --noEmit -p sapi/tsconfig.json",
     "test": "node --test --import tsx/esm test/*.test.ts",
     "lint": "eslint \"sapi/**/*.ts\" \"test/**/*.ts\"",
@@ -39,6 +42,10 @@
   },
   "peerDependencies": {
     "@sfmc-bds/sdk": ">=0.2.0"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
   },
   "engines": {
     "node": ">=22.13.0"
