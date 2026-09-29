@@ -1,7 +1,3 @@
-/**
- * @sfmc-bds/module-activity-log — 原生事件 + record/query 审计中枢
- */
-
 import {
   Block,
   Entity,
@@ -40,6 +36,7 @@ const TABLE = "sfmc_activities";
 
 type Level = "info" | "warn" | "error";
 
+// === TYPE ===
 interface QueueEntry {
   timestamp: number;
   event_type: string;
@@ -70,6 +67,7 @@ interface ActivityRecord {
   payload?: Record<string, unknown>;
   createdAt: string;
 }
+
 
 let queue: QueueEntry[] = [];
 let flushIntervalMs = 2000;
@@ -567,7 +565,7 @@ function subscribeNative(): void {
     }
   });
 }
-
+// === REGISTRY ===
 ModuleRegistry.register({
   id: MODULE_ID,
   afterWorldLoad: false,
