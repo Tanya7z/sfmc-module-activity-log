@@ -1,5 +1,8 @@
 allowBuilds:
   esbuild: true
 
+minimumReleaseAgeExclude:
+  - "@sfmc-bds/sdk@0.2.4"
+
 onlyBuiltDependencies:
   - esbuild

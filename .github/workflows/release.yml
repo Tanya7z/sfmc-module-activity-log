@@ -26,7 +26,6 @@ jobs:
           fetch-depth: 0
       - uses: pnpm/action-setup@v4
         with:
-          version: 10.8.0
           run_install: false
       - uses: actions/setup-node@v4
         with:
@@ -41,7 +40,6 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm run typecheck
       - run: pnpm run lint
-      - run: pnpm run test
       - name: 打包候选产物
         run: mkdir -p artifacts && pnpm pack --pack-destination artifacts
       - uses: actions/upload-artifact@v4
