@@ -13,5 +13,5 @@ pnpm run test
 Install into platform:
 
 ```bash
-sfmc mod install activity-log 
+sfmc mod install activity-log
 ```

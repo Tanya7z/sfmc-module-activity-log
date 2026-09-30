@@ -7,8 +7,5 @@
   "arrowParens": "always",
   "printWidth": 120,
   "endOfLine": "auto",
-  "plugins": [
-    "prettier-plugin-organize-imports"
-  ]
+  "plugins": ["prettier-plugin-organize-imports"]
 }
-
